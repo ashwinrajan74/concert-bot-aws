@@ -1,0 +1,196 @@
+import json
+import datetime
+import boto3
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table('concerttable')
+
+def validate(slots):
+    valid_concert = ['pop', 'jazz', 'rock']
+    valid_rock_singers = ["freddie mercury", "robert plant", "janis joplin"]
+    valid_pop_singers = ["madonna", "michael jackson", "ariana grande"]
+    valid_jazz_singers = ["ella fitzgerald", "louis armstrong", "billie holiday"]
+    
+    
+    if 'concerttype' not in slots or not slots['concerttype']:
+        return {
+            'isValid': False,
+            'violatedSlot': 'concerttype'
+        }
+        
+    concert_type = slots['concerttype']['value']['originalValue'].lower()
+    
+    if concert_type not in valid_concert:
+        return {
+            'isValid': False,
+            'violatedSlot': 'concerttype',
+            'message': 'We currently support only {} as valid concert types.'.format(", ".join(valid_concert))
+        }
+    
+    
+    if concert_type == 'rock':
+        if 'concertsinger' not in slots or not slots['concertsinger']:
+            return {
+                'isValid': False,
+                'violatedSlot': 'concertsinger',
+                'message': 'Please specify a rock singer (e.g., {}).'.format(", ".join([singer.title() for singer in valid_rock_singers]))
+            }
+        elif slots['concertsinger']['value']['originalValue'].lower() not in valid_rock_singers:
+            return {
+                'isValid': False,
+                'violatedSlot': 'concertsinger',
+                'message': 'Please choose a valid rock singer: {}'.format(", ".join([singer.title() for singer in valid_rock_singers]))
+            }
+    
+    elif concert_type == 'pop':
+        if 'concertsinger' not in slots or not slots['concertsinger']:
+            return {
+                'isValid': False,
+                'violatedSlot': 'concertsinger',
+                'message': 'Please specify a pop singer (e.g., {}).'.format(", ".join([singer.title() for singer in valid_pop_singers]))
+            }
+        elif slots['concertsinger']['value']['originalValue'].lower() not in valid_pop_singers:
+            return {
+                'isValid': False,
+                'violatedSlot': 'concertsinger',
+                'message': 'Please choose a valid pop singer: {}'.format(", ".join([singer.title() for singer in valid_pop_singers]))
+            }
+    
+    elif concert_type == 'jazz':
+        if 'concertsinger' not in slots or not slots['concertsinger']:
+            return {
+                'isValid': False,
+                'violatedSlot': 'concertsinger',
+                'message': 'Please specify a jazz singer (e.g., {}).'.format(", ".join([singer.title() for singer in valid_jazz_singers]))
+            }
+        elif slots['concertsinger']['value']['originalValue'].lower() not in valid_jazz_singers:
+            return {
+                'isValid': False,
+                'violatedSlot': 'concertsinger',
+                'message': 'Please choose a valid jazz singer: {}'.format(", ".join([singer.title() for singer in valid_jazz_singers]))
+            }
+    
+    # Validate date
+    if 'date' not in slots or not slots['date']:
+        return {
+            'isValid': False,
+            'violatedSlot': 'date',
+        }
+    
+    # Convert date to a datetime object for validation
+    try:
+        selected_date = datetime.datetime.strptime(slots['date']['value']['originalValue'], '%Y-%m-%d').date()
+    except ValueError:
+        return {
+            'isValid': False,
+            'violatedSlot': 'date',
+            'message': 'The date format is invalid. Please provide a date in YYYY-MM-DD format.'
+        }
+    
+    current_date = datetime.date.today()
+    max_booking_date = current_date + datetime.timedelta(days=7)
+    
+    if not (current_date <= selected_date <= max_booking_date):
+        return {
+            'isValid': False,
+            'violatedSlot': 'date',
+            'message': 'You can only book a concert within the next 7 days from today.'
+        }
+    
+    # Validate time
+    if 'time' not in slots or not slots['time']:
+        return {
+            'isValid': False,
+            'violatedSlot': 'time'
+        }
+    
+
+    if 'ticket' not in slots or not slots['ticket']:
+        return {
+            'isValid': False,
+            'violatedSlot': 'ticket'
+        }
+
+    
+    if 'name' not in slots or not slots['name']:
+        return {
+            'isValid': False,
+            'violatedSlot': 'name'
+        }
+    
+    return {'isValid': True}
+    
+def lambda_handler(event, context):
+    
+    slots = event['sessionState']['intent']['slots']
+    intent = event['sessionState']['intent']['name']
+
+    validation_result = validate(slots)
+    
+    if event['invocationSource'] == 'DialogCodeHook':
+        if not validation_result['isValid']:
+            response = {
+                "sessionState": {
+                    "dialogAction": {
+                        'slotToElicit': validation_result['violatedSlot'],
+                        "type": "ElicitSlot"
+                    },
+                    "intent": {
+                        'name': intent,
+                        'slots': slots
+                    }
+                }
+            }
+            
+            if 'message' in validation_result:
+                response["messages"] = [
+                    {
+                        "contentType": "PlainText",
+                        "content": validation_result['message']
+                    }
+                ]
+                
+            return response
+        else:
+            return {
+                "sessionState": {
+                    "dialogAction": {
+                        "type": "Delegate"
+                    },
+                    "intent": {
+                        'name': intent,
+                        'slots': slots
+                    }
+                }
+            }
+    
+    if event['invocationSource'] == 'FulfillmentCodeHook':
+        item = {
+            'concerttype': slots['concerttype']['value']['originalValue'],
+            'concertsinger': slots['concertsinger']['value']['originalValue'],
+            'date': slots['date']['value']['originalValue'],
+            'time': slots['time']['value']['originalValue'],
+            'ticket': slots['ticket']['value']['originalValue'],
+            'name': slots['name']['value']['originalValue']
+        }
+        
+        table.put_item(Item=item)
+        
+        return {
+            "sessionState": {
+                "dialogAction": {
+                    "type": "Close"
+                },
+                "intent": {
+                    'name': intent,
+                    'slots': slots,
+                    'state': 'Fulfilled'
+                }
+            },
+            "messages": [
+                {
+                    "contentType": "PlainText",
+                    "content": "Thanks, I have placed your reservation."
+                }
+            ]
+        }
